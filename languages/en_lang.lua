@@ -6,7 +6,7 @@ Locales["en_lang"] = {
     ReceivedMessages = 'Received Messages',
     MessageContent = 'Message Content',
     SelectRecipient = 'Select a Recipient',
-    SendPigeon = 'Send Pigeon',
+    SendPigeon = 'Send Mail',
     InvalidRecipient = 'Invalid recipient, subject, or message',
     MailDeleted = 'Mail deleted successfully.',
     MailDeletionFailed = 'Failed to delete mail.',
@@ -44,4 +44,5 @@ Locales["en_lang"] = {
     NearMailbox = 'Near Mailbox',
     NewMailNotification = 'You have received new mail.',
     mailFrom = 'From:',
+    ReplyButtonLabel = 'Reply',
 }

@@ -44,4 +44,5 @@ Locales["ro_lang"] = {
     NearMailbox = 'Cutie Postala',
     NewMailNotification = 'Ai o telegrama necitita.',
     mailFrom = 'De la:',
+    ReplyButtonLabel = 'Raspunde',
 }

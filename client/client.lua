@@ -241,16 +241,14 @@ function OpenMessagePage(mail)
             </p>
         </div>
     ]], 
-        mail.subject or "No Subject", -- Display the message subject
-        mail.message or "No message content" -- Display the actual message
+        mail.subject or "No Subject",
+        mail.message or "No message content"
     )    
 
-    -- Insert the message HTML into the message display page
     MessagePage:RegisterElement('html', {
         value = { messageHTML },
         style = {}
     })
-
 
     MessagePage:RegisterElement('line', {
         slot = "footer",
@@ -263,6 +261,18 @@ function OpenMessagePage(mail)
         style = {},
     }, function()
         OpenCheckMessagePage({ mail })
+    end)
+
+    -- Add Reply button
+    MessagePage:RegisterElement('button', {
+        label = _U('ReplyButtonLabel') or "Reply", -- Add this to your locale file
+        slot = "footer",
+        style = {},
+    }, function()
+        -- Set the recipient for the reply
+        recipientId = mail.from_char -- Use the sender's mailbox ID
+        -- Open send message page with pre-filled subject
+        OpenSendMessagePageWithReply(mail)
     end)
 
     MessagePage:RegisterElement('button', {
@@ -282,6 +292,82 @@ function OpenMessagePage(mail)
     MessagePage:RouteTo()
 end
 
+function OpenSendMessagePageWithReply(originalMail)
+    devPrint("Creating SendMessagePage for reply")
+    SendMessagePage = MailboxMenu:RegisterPage('sendmail:page')
+    SendMessagePage:RegisterElement('header', {
+        value = _U('SendPigeonHeader'),
+        slot = "header",
+        style = {}
+    })
+
+    local mailMessage = ''
+    local subjectTitle = 'Re: ' .. (originalMail.subject or "No Subject") -- Pre-fill with Re: prefix
+
+    SendMessagePage:RegisterElement('line', {
+        slot = "header",
+        style = {}
+    })
+
+    -- Show who you're replying to
+    SendMessagePage:RegisterElement('html', {
+        value = { '<p style="text-align: center; font-size: 16px; margin: 10px 0;">Replying to: <b>' .. (originalMail.from_name or "Unknown") .. '</b></p>' },
+        style = {}
+    })
+
+    SendMessagePage:RegisterElement('input', {
+        persist = false,
+        label = _U('SubjectPlaceholder'),
+        placeholder = _U('SubjectPlaceholder'),
+        value = subjectTitle, -- Pre-fill the subject
+        style = {}
+    }, function(data)
+        subjectTitle = data.value
+    end)
+
+    SendMessagePage:RegisterElement('textarea', {
+        placeholder = _U('MessagePlaceholder'),
+        rows = "6",
+        resize = true,
+        style = {}
+    }, function(data)
+        mailMessage = data.value
+    end)
+
+    SendMessagePage:RegisterElement('line', {
+        slot = "footer",
+        style = {}
+    })
+
+    SendMessagePage:RegisterElement('button', {
+        label = _U('SendMailButton'),
+        slot = "footer",
+        style = {},
+    }, function(data)
+        devPrint("recipientId: " .. recipientId .. " subjectTitle: " .. subjectTitle .. " mailMessage: " .. mailMessage)
+        TriggerServerEvent("bcc-mailbox:sendMail", recipientId, subjectTitle, mailMessage)
+        if Config.SendPigeon then
+            TriggerEvent('spawnPigeon')
+        end
+        OpenMailboxMenu(true)
+    end)
+
+    SendMessagePage:RegisterElement('button', {
+        label = _U('BackButtonLabel'),
+        slot = "footer",
+        style = {},
+    }, function()
+        OpenMessagePage(originalMail) -- Go back to the original message
+    end)
+
+    SendMessagePage:RegisterElement('bottomline', {
+        slot = "footer",
+        style = {}
+    })
+
+    SendMessagePage:RouteTo()
+end
+
 function OpenSelectRecipientPage()
     devPrint("Creating SelectRecipientPage")
     SelectRecipientPage = MailboxMenu:RegisterPage('selectrecipient:page')
@@ -296,36 +382,92 @@ function OpenSelectRecipientPage()
         style = {}
     })
 
-    for _, recipient in ipairs(recipients) do
-        SelectRecipientPage:RegisterElement('button', {
-            label = recipient.name,
-            style = {},
-        }, function()
-            devPrint("Recipient selected: " .. recipient.name)
-            recipientId = recipient.mailbox_id
-            OpenSendMessagePage()
-        end)
-    end
-
-    SelectRecipientPage:RegisterElement('line', {
-        slot = "footer",
+    -- Add search input field
+    local searchTerm = ""
+    SelectRecipientPage:RegisterElement('input', {
+        label = "Search Recipients",
+        placeholder = "Type to search...",
+        persist = false,
         style = {}
-    })
-
-    SelectRecipientPage:RegisterElement('button', {
-        label = _U('BackButtonLabel'),
-        slot = "footer",
-        style = {},
-    }, function()
-        OpenMailboxMenu(true)
+    }, function(data)
+        searchTerm = data.value:lower()
+        -- Refresh the page with filtered results
+        RefreshRecipientList(searchTerm)
     end)
 
-    SelectRecipientPage:RegisterElement('bottomline', {
-        slot = "footer",
-        style = {}
-    })
+    -- Function to refresh recipient list based on search
+    function RefreshRecipientList(filter)
+        -- Clear existing buttons (except header, line, and search input)
+        SelectRecipientPage = MailboxMenu:RegisterPage('selectrecipient:page')
+        
+        SelectRecipientPage:RegisterElement('header', {
+            value = _U('SelectRecipientHeader'),
+            slot = "header",
+            style = {}
+        })
+    
+        SelectRecipientPage:RegisterElement('line', {
+            slot = "header",
+            style = {}
+        })
+    
+        -- Re-add search input
+        SelectRecipientPage:RegisterElement('input', {
+            label = "Search Recipients",
+            placeholder = "Type to search...",
+            persist = false,
+            value = filter,
+            style = {}
+        }, function(data)
+            searchTerm = data.value:lower()
+            RefreshRecipientList(searchTerm)
+        end)
+    
+        -- Sort recipients alphabetically
+        table.sort(recipients, function(a, b)
+            return a.name:lower() < b.name:lower()
+        end)
+    
+        -- Filter and display recipients
+        for _, recipient in ipairs(recipients) do
+            -- Skip if this is the current player's mailbox
+            if recipient.mailbox_id ~= playermailboxId then
+                if filter == "" or recipient.name:lower():find(filter) then
+                    SelectRecipientPage:RegisterElement('button', {
+                        label = recipient.name,
+                        style = {},
+                    }, function()
+                        devPrint("Recipient selected: " .. recipient.name)
+                        recipientId = recipient.mailbox_id
+                        OpenSendMessagePage()
+                    end)
+                end
+            end
+        end
+    
+        SelectRecipientPage:RegisterElement('line', {
+            slot = "footer",
+            style = {}
+        })
+    
+        SelectRecipientPage:RegisterElement('button', {
+            label = _U('BackButtonLabel'),
+            slot = "footer",
+            style = {},
+        }, function()
+            OpenMailboxMenu(true)
+        end)
+    
+        SelectRecipientPage:RegisterElement('bottomline', {
+            slot = "footer",
+            style = {}
+        })
+    
+        SelectRecipientPage:RouteTo()
+    end
 
-    SelectRecipientPage:RouteTo()
+    -- Initial load with all recipients
+    RefreshRecipientList("")
 end
 
 function OpenSendMessagePage()
