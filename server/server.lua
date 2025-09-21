@@ -1,21 +1,97 @@
 local VORPcore = exports.vorp_core:GetCore()
 BccUtils = exports['bcc-utils'].initiate()
 
--- Function to print debug messages
+-- Defensive defaults if shared config not yet loaded
+if type(Config) ~= 'table' then Config = {} end
+Config.MailboxItem = Config.MailboxItem or 'letter'
+Config.SendMessageFee = Config.SendMessageFee or 2
+Config.devMode = Config.devMode or false
+local MailboxAPI = MailboxAPI or exports['bcc-mailbox']:getMailboxAPI()
+
+do
+    local seed = os.time()
+    if type(GetGameTimer) == 'function' then
+        seed = seed + GetGameTimer()
+    end
+    math.randomseed(seed)
+end
+
+local function generatePostalCode()
+    local letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    local function randomLetter()
+        local idx = math.random(1, #letters)
+        return letters:sub(idx, idx)
+    end
+    local function randomDigit()
+        return tostring(math.random(0, 9))
+    end
+    return randomLetter() .. randomLetter() .. randomDigit() .. randomDigit() .. randomDigit()
+end
+
+local function generateUniquePostalCode()
+    while true do
+        local candidate = generatePostalCode()
+        local exists = MySQL.scalar.await('SELECT 1 FROM bcc_mailboxes WHERE postal_code = ? LIMIT 1', { candidate })
+        if not exists then
+            return candidate
+        end
+    end
+end
+
+local function normalizePostalCode(code)
+    if not code then return nil end
+    code = tostring(code):gsub('%s+', '')
+    if code == '' then return nil end
+    return string.upper(code)
+end
+
+-- tiny helper to find an online player's source by char_identifier
+local function findPlayerByCharIdentifier(charidentifier)
+    for _, src in ipairs(GetPlayers()) do
+        local User = VORPcore.getUser(src)
+        if User then
+            local Character = User.getUsedCharacter
+            if Character and Character.charIdentifier == charidentifier then
+                return src
+            end
+        end
+    end
+    return nil
+end
+
+local function fetchAndSendContacts(src, ownerMailboxId)
+    if not ownerMailboxId then return end
+
+    local contactRows = MySQL.query.await([[
+        SELECT
+            c.id,
+            c.contact_alias,
+            m.mailbox_id,
+            m.postal_code,
+            m.first_name,
+            m.last_name
+        FROM bcc_mailbox_contacts c
+        INNER JOIN bcc_mailboxes m ON c.contact_mailbox_id = m.mailbox_id
+        WHERE c.owner_mailbox_id = ?
+        ORDER BY COALESCE(c.contact_alias, m.first_name, '')
+    ]], { ownerMailboxId }) or {}
+
+    for _, contact in ipairs(contactRows) do
+        local fullName = string.format('%s %s', contact.first_name or '', contact.last_name or ''):gsub('^%s*(.-)%s*$',
+            '%1')
+        contact.displayName = contact.contact_alias or (#fullName > 0 and fullName or contact.postal_code)
+    end
+
+    TriggerClientEvent('bcc-mailbox:setRecipients', src, contactRows)
+    return contactRows
+end
+
 function devPrint(msg)
     if Config.devMode then
         print(msg)
     end
 end
 
--- Function to register mailbox item
-local function registerMailboxItem(itemName)
-    exports.vorp_inventory:registerUsableItem(itemName, function(data)
-        handleMailboxItemUse(data.source, itemName)
-    end)
-end
-
--- Function to handle mailbox item use
 function handleMailboxItemUse(src, itemName)
     local User = VORPcore.getUser(src)
 
@@ -26,14 +102,18 @@ function handleMailboxItemUse(src, itemName)
             local firstName = Character.firstname
             local lastName = Character.lastname
 
-            exports.oxmysql:query('SELECT mailbox_id FROM bcc_mailboxes WHERE char_identifier = ?', {charidentifier}, function(result)
-                if result and #result > 0 then
-                    local mailboxId = result[1].mailbox_id
-                    TriggerClientEvent("bcc-mailbox:mailboxStatus", src, true, mailboxId, firstName .. " " .. lastName)
-                else
-                    TriggerClientEvent("bcc-mailbox:mailboxStatus", src, false, nil, firstName .. " " .. lastName)
-                end
-            end)
+            MySQL.query('SELECT mailbox_id, postal_code FROM bcc_mailboxes WHERE char_identifier = ?', { charidentifier },
+                function(result)
+                    if result and #result > 0 then
+                        local mailboxId = result[1].mailbox_id
+                        local postalCode = result[1].postal_code
+                        TriggerClientEvent("bcc-mailbox:mailboxStatus", src, true, mailboxId,
+                            firstName .. " " .. lastName, postalCode)
+                    else
+                        TriggerClientEvent("bcc-mailbox:mailboxStatus", src, false, nil, firstName .. " " .. lastName,
+                            nil)
+                    end
+                end)
         else
             devPrint("Error: Character data not found for user: " .. src)
         end
@@ -43,9 +123,12 @@ function handleMailboxItemUse(src, itemName)
     exports.vorp_inventory:closeInventory(src)
 end
 
-registerMailboxItem(Config.MailboxItem)
+exports.vorp_inventory:registerUsableItem(Config.MailboxItem, function(data)
+    local src = data.source
+    exports.vorp_inventory:closeInventory(src)
+    handleMailboxItemUse(data.source, Config.MailboxItem)
+end, GetCurrentResourceName())
 
--- Function to update mailbox info
 function updateMailboxInfo(src)
     local User = VORPcore.getUser(src)
     if User then
@@ -55,13 +138,19 @@ function updateMailboxInfo(src)
             local firstName = Character.firstname
             local lastName = Character.lastname
 
-            exports.oxmysql:execute('UPDATE bcc_mailboxes SET first_name = ?, last_name = ? WHERE char_identifier = ?', {firstName, lastName, charidentifier}, function(affectedRows)
-                if affectedRows and affectedRows > 0 then
-                    devPrint(_U('UpdateMailboxInfo') .. charidentifier)
-                else
-                    devPrint(_U('UpdateMailboxFailed') .. charidentifier)
-                end
-            end)
+            MySQL.update('UPDATE bcc_mailboxes SET first_name = ?, last_name = ? WHERE char_identifier = ?',
+                { firstName, lastName, charidentifier }, function(affectedRows)
+                    if affectedRows and affectedRows > 0 then
+                        devPrint(_U('UpdateMailboxInfo') .. charidentifier)
+                        local mailbox = MailboxAPI:GetMailboxByCharIdentifier(charidentifier)
+                        if mailbox then
+                            TriggerClientEvent('bcc-mailbox:updateMailboxId', src, mailbox.mailbox_id,
+                                mailbox.postal_code)
+                        end
+                    else
+                        devPrint(_U('UpdateMailboxFailed') .. charidentifier)
+                    end
+                end)
         else
             devPrint("Error: Character data not found for user: " .. src)
         end
@@ -70,102 +159,85 @@ function updateMailboxInfo(src)
     end
 end
 
--- Function to get player source by mailbox ID
-function GetPlayerFromMailboxId(mailboxId, callback)
-    local foundPlayerId = nil
-    local players = GetPlayers()
-    local totalPlayers = #players
-    local checkedPlayers = 0
-
-    for _, playerId in ipairs(players) do
-        local User = VORPcore.getUser(playerId)
-        if User then
-            local Character = User.getUsedCharacter
-            if Character then
-                exports.oxmysql:query('SELECT mailbox_id FROM bcc_mailboxes WHERE char_identifier = ?', {Character.charIdentifier}, function(result)
-                    checkedPlayers = checkedPlayers + 1
-                    if result and #result > 0 then
-                        local playerMailboxId = tostring(result[1].mailbox_id)
-                        devPrint("Checking player: " .. playerId .. " with Mailbox ID: '" .. playerMailboxId .. "'")
-                        if playerMailboxId == tostring(mailboxId) then
-                            foundPlayerId = playerId
-                            devPrint("Found matching player: " .. playerId)
-                            callback(foundPlayerId)
-                            return
-                        end
-                    end
-
-                    -- If all players have been checked and no match was found
-                    if checkedPlayers == totalPlayers and not foundPlayerId then
-                        devPrint("No matching player found for Mailbox ID: '" .. mailboxId .. "'")
-                        callback(nil)
-                    end
-                end)
-            else
-                checkedPlayers = checkedPlayers + 1
-                if checkedPlayers == totalPlayers and not foundPlayerId then
-                    devPrint("No matching player found for Mailbox ID: '" .. mailboxId .. "'")
-                    callback(nil)
-                end
-            end
-        else
-            checkedPlayers = checkedPlayers + 1
-            if checkedPlayers == totalPlayers and not foundPlayerId then
-                devPrint("No matching player found for Mailbox ID: '" .. mailboxId .. "'")
-                callback(nil)
-            end
-        end
-    end
-end
-
+-- ======================
+-- SEND MAIL (fixed + logs + optional push)
+-- ======================
 RegisterNetEvent("bcc-mailbox:sendMail")
-AddEventHandler("bcc-mailbox:sendMail", function(recipientMailboxId, subject, message)
+AddEventHandler("bcc-mailbox:sendMail", function(recipientPostalCode, subject, message)
     local _source = source
     local User = VORPcore.getUser(_source)
+    if not User then
+        devPrint("sendMail: user not found for source " .. tostring(_source))
+        return
+    end
+
     local Character = User.getUsedCharacter
-    local senderCharId = Character.charIdentifier
-    local senderName = Character.firstname .. " " .. Character.lastname
+    if not Character then
+        devPrint("sendMail: character not found for user " .. tostring(_source))
+        return
+    end
 
     devPrint("sendMail event triggered")
-    devPrint("Recipient Mailbox ID: '" .. recipientMailboxId .. "'")
-    devPrint("Subject: " .. subject)
-    devPrint("Message: " .. message)
+    devPrint("Recipient Postal Code: '" .. tostring(recipientPostalCode) .. "'")
+    devPrint("Subject: " .. tostring(subject))
+    devPrint("Message: " .. tostring(message))
 
-    if Character.money >= Config.SendMessageFee then
-        Character.removeCurrency(0, Config.SendMessageFee)
-
-        exports.oxmysql:query('SELECT mailbox_id FROM bcc_mailboxes WHERE char_identifier = ?', {senderCharId}, function(senderResult)
-            if senderResult and #senderResult > 0 then
-                local senderMailboxId = senderResult[1].mailbox_id
-                if recipientMailboxId and recipientMailboxId ~= "" and subject and subject ~= "" and message and message ~= "" then
-                    local formattedTimestamp = os.date('%Y-%m-%d %H:%M:%S', os.time())
-                    exports.oxmysql:insert('INSERT INTO bcc_mailbox_messages (from_char, to_char, from_name, subject, message, timestamp) VALUES (?, ?, ?, ?, ?, ?)', 
-                    {senderMailboxId, recipientMailboxId, senderName, subject, message, formattedTimestamp}, function(inserted)
-                        if inserted then
-                            VORPcore.NotifyObjective(_source, _U('MessageSent'), 5000)
-
-                            -- Notify the recipient about the new mail using the callback
-                            GetPlayerFromMailboxId(recipientMailboxId, function(recipientSource)
-                                if recipientSource then
-                                    devPrint("Notifying recipient: " .. recipientSource)  -- Debug print
-                                    TriggerClientEvent("bcc-mailbox:checkMailNotification", recipientSource)
-                                else
-                                    devPrint("Recipient not found for mailbox identifier: '" .. recipientMailboxId .. "'")  -- Debug print
-                                end
-                            end)
-                        else
-                            VORPcore.NotifyObjective(_source, _U('MessageFailed'), 5000)
-                        end
-                    end)
-                else
-                    VORPcore.NotifyObjective(_source, _U('InvalidRecipient'), 5000)
-                end
-            else
-                VORPcore.NotifyObjective(_source, _U('MailboxNotFound'), 5000)
-            end
-        end)
-    else
+    local availableMoney = tonumber(Character.money) or 0
+    if availableMoney < Config.SendMessageFee then
         VORPcore.NotifyObjective(_source, _U('NotEnoughMoney'), 5000)
+        return
+    end
+
+    local normalizedCode = normalizePostalCode(recipientPostalCode)
+    if not normalizedCode then
+        VORPcore.NotifyObjective(_source, _U('InvalidRecipient'), 5000)
+        return
+    end
+
+    local targetMailbox = MailboxAPI:GetMailboxByPostalCode(normalizedCode)
+    if not targetMailbox then
+        VORPcore.NotifyObjective(_source, _U('InvalidRecipient'), 5000)
+        return
+    end
+
+    local senderMailbox = MailboxAPI:GetMailboxByCharIdentifier(Character.charIdentifier)
+    if not senderMailbox then
+        VORPcore.NotifyObjective(_source, _U('MailboxNotFound'), 5000)
+        return
+    end
+
+    local senderName = (Character.firstname or '') .. " " .. (Character.lastname or '')
+    local options = {
+        fromChar = senderMailbox.postal_code, -- keep using postal as in your client
+        fromName = senderName
+    }
+
+    local ok, result = MailboxAPI:SendMailToMailbox(targetMailbox.mailbox_id, subject, message, options)
+    print(("[bcc-mailbox] SendMailToMailbox -> ok=%s result=%s to_mailbox=%s subject=%s")
+        :format(tostring(ok), tostring(result), tostring(targetMailbox.mailbox_id), tostring(subject)))
+
+    if ok then
+        Character.removeCurrency(0, Config.SendMessageFee)
+        VORPcore.NotifyObjective(_source, _U('MessageSent'), 5000)
+
+        -- OPTIONAL: notify recipient if online
+        local recChar = MySQL.single.await('SELECT char_identifier FROM bcc_mailboxes WHERE mailbox_id = ? LIMIT 1',
+            { targetMailbox.mailbox_id })
+        if recChar and recChar.char_identifier then
+            local tSrc = findPlayerByCharIdentifier(recChar.char_identifier)
+            if tSrc then
+                TriggerClientEvent("bcc-mailbox:checkMailNotification", tSrc)
+            end
+        end
+    else
+        devPrint("sendMail failed: " .. tostring(result))
+        if result == 'invalid_content' then
+            VORPcore.NotifyObjective(_source, _U('InvalidRecipient'), 5000)
+        elseif result == 'invalid_mailbox' or result == 'mailbox_not_found' then
+            VORPcore.NotifyObjective(_source, _U('InvalidRecipient'), 5000)
+        else
+            VORPcore.NotifyObjective(_source, _U('MessageFailed'), 5000)
+        end
     end
 end)
 
@@ -179,52 +251,73 @@ RegisterNetEvent("bcc-mailbox:checkMailbox")
 AddEventHandler("bcc-mailbox:checkMailbox", function()
     local _source = source
     local User = VORPcore.getUser(_source)
+    if not User then return end
     local Character = User.getUsedCharacter
+    if not Character then return end
     local charidentifier = Character.charIdentifier
     local firstName = Character.firstname
     local lastName = Character.lastname
 
-    exports.oxmysql:query('SELECT mailbox_id FROM bcc_mailboxes WHERE char_identifier = ?', {charidentifier}, function(result)
-        if result and #result > 0 then
-            TriggerClientEvent("bcc-mailbox:mailboxStatus", _source, true, result[1].mailbox_id, firstName .. " " .. lastName)
-        else
-            TriggerClientEvent("bcc-mailbox:mailboxStatus", _source, false, nil, firstName .. " " .. lastName)
-        end
-    end)
+    MySQL.query('SELECT mailbox_id, postal_code FROM bcc_mailboxes WHERE char_identifier = ?', { charidentifier },
+        function(result)
+            if result and #result > 0 then
+                TriggerClientEvent("bcc-mailbox:mailboxStatus", _source, true, result[1].mailbox_id,
+                    firstName .. " " .. lastName, result[1].postal_code)
+            else
+                TriggerClientEvent("bcc-mailbox:mailboxStatus", _source, false, nil, firstName .. " " .. lastName, nil)
+            end
+        end)
 end)
 
+-- ======================
+-- CHECK MAIL (fixed to match id OR postal, safe timestamps)
+-- ======================
 RegisterNetEvent("bcc-mailbox:checkMail")
 AddEventHandler("bcc-mailbox:checkMail", function()
     local _source = source
     local User = VORPcore.getUser(_source)
+    if not User then return end
     local Character = User.getUsedCharacter
-    local charidentifier = Character.charIdentifier
+    if not Character then return end
 
-    exports.oxmysql:execute('SELECT mailbox_id FROM bcc_mailboxes WHERE char_identifier = ?', {charidentifier}, function(result)
-        if result and #result > 0 then
-            local recipientMailboxId = result[1].mailbox_id
+    MySQL.query('SELECT mailbox_id, postal_code FROM bcc_mailboxes WHERE char_identifier = ? LIMIT 1',
+        { Character.charIdentifier }, function(result)
+            if result and #result > 0 then
+                local recipientMailboxId = result[1].mailbox_id
+                local recipientPostal    = result[1].postal_code
 
-            exports.oxmysql:execute('SELECT * FROM bcc_mailbox_messages WHERE to_char = ?', {recipientMailboxId}, function(mails)
-                if mails and #mails > 0 then
-                    for _, mail in ipairs(mails) do
-                        mail.timestamp = os.date('%Y-%m-%d %H:%M:%S', mail.timestamp)
+                -- Match both representations (string compare): mailbox_id OR postal_code
+                MySQL.query([[
+                SELECT *
+                FROM bcc_mailbox_messages
+                WHERE to_char = ? OR to_char = ?
+                ORDER BY id DESC
+            ]], { tostring(recipientMailboxId), recipientPostal }, function(mails)
+                    if mails and #mails > 0 then
+                        for _, mail in ipairs(mails) do
+                            -- keep DATETIME strings; only format if it's a numeric epoch
+                            if type(mail.timestamp) == "number" then
+                                mail.timestamp = os.date('%Y-%m-%d %H:%M:%S', mail.timestamp)
+                            end
+                        end
+                        TriggerClientEvent("bcc-mailbox:receiveMails", _source, mails)
+                    else
+                        VORPcore.NotifyObjective(_source, _U('NoMailsFound'), 5000)
                     end
-                    TriggerClientEvent("bcc-mailbox:receiveMails", _source, mails)
-                else
-                    VORPcore.NotifyObjective(_source, _U('NoMailsFound'), 5000)
-                end
-            end)
-        else
-            VORPcore.NotifyObjective(_source, _U('MailboxNotFound'), 5000)
-        end
-    end)
+                end)
+            else
+                VORPcore.NotifyObjective(_source, _U('MailboxNotFound'), 5000)
+            end
+        end)
 end)
 
 RegisterNetEvent("bcc-mailbox:registerMailbox")
 AddEventHandler("bcc-mailbox:registerMailbox", function()
     local _source = source
     local User = VORPcore.getUser(_source)
+    if not User then return end
     local Character = User.getUsedCharacter
+    if not Character then return end
     local charidentifier = Character.charIdentifier
     local first_name = Character.firstname
     local last_name = Character.lastname
@@ -232,22 +325,26 @@ AddEventHandler("bcc-mailbox:registerMailbox", function()
     if Character.money >= Config.RegistrationFee then
         Character.removeCurrency(0, Config.RegistrationFee)
 
-        exports.oxmysql:insert('INSERT INTO bcc_mailboxes (char_identifier, first_name, last_name) VALUES (?, ?, ?)', 
-        {charidentifier, first_name, last_name}, function(insertId)
-            if insertId then
-                exports.oxmysql:execute('SELECT mailbox_id FROM bcc_mailboxes WHERE mailbox_id = ?', {insertId}, function(result)
-                    if result and #result > 0 then
-                        local newMailboxId = result[1].mailbox_id
-                        TriggerClientEvent("bcc-mailbox:updateMailboxId", _source, newMailboxId)
-                        TriggerClientEvent("bcc-mailbox:registerResult", _source, true, _U('MailboxRegistered'))
-                    else
-                        TriggerClientEvent("bcc-mailbox:registerResult", _source, false, _U('RegistrationError'))
-                    end
-                end)
-            else
-                TriggerClientEvent("bcc-mailbox:registerResult", _source, false, _U('MailboxRegistrationFailed'))
-            end
-        end)
+        local postalCode = generateUniquePostalCode()
+
+        MySQL.insert(
+            'INSERT INTO bcc_mailboxes (char_identifier, first_name, last_name, postal_code) VALUES (?, ?, ?, ?)',
+            { charidentifier, first_name, last_name, postalCode }, function(insertId)
+                if insertId then
+                    MySQL.query('SELECT mailbox_id FROM bcc_mailboxes WHERE mailbox_id = ?', { insertId },
+                        function(result)
+                            if result and #result > 0 then
+                                local newMailboxId = result[1].mailbox_id
+                                TriggerClientEvent("bcc-mailbox:updateMailboxId", _source, newMailboxId, postalCode)
+                                TriggerClientEvent("bcc-mailbox:registerResult", _source, true, _U('MailboxRegistered'))
+                            else
+                                TriggerClientEvent("bcc-mailbox:registerResult", _source, false, _U('RegistrationError'))
+                            end
+                        end)
+                else
+                    TriggerClientEvent("bcc-mailbox:registerResult", _source, false, _U('MailboxRegistrationFailed'))
+                end
+            end)
     else
         VORPcore.NotifyObjective(_source, _U('MailboxRegistrationFee'), 5000)
     end
@@ -256,28 +353,119 @@ end)
 RegisterNetEvent("bcc-mailbox:deleteMail")
 AddEventHandler("bcc-mailbox:deleteMail", function(mailId)
     local _source = source
-
-    exports.oxmysql:execute('DELETE FROM bcc_mailbox_messages WHERE id = ?', {mailId}, function(affectedRows)
-        if affectedRows then
-            VORPcore.NotifyObjective(_source, _U('MailDeleted'), 5000)
-        else
-            VORPcore.NotifyObjective(_source, _U('MailDeletionFailed'), 5000)
-        end
-    end)
+    local affected = MySQL.update.await('DELETE FROM bcc_mailbox_messages WHERE id = ?', { mailId })
+    if affected and affected > 0 then
+        VORPcore.NotifyObjective(_source, _U('MailDeleted'), 5000)
+    else
+        VORPcore.NotifyObjective(_source, _U('MailDeletionFailed'), 5000)
+    end
 end)
 
 RegisterNetEvent("bcc-mailbox:getRecipients")
 AddEventHandler("bcc-mailbox:getRecipients", function()
     local _source = source
+    local User = VORPcore.getUser(_source); if not User then return end
+    local Character = User.getUsedCharacter; if not Character then return end
 
-    exports.oxmysql:query('SELECT mailbox_id, CONCAT(first_name, " ", last_name) AS name FROM bcc_mailboxes', {}, function(results)
-        if results then
-            TriggerClientEvent('bcc-mailbox:setRecipients', _source, results)
-        end
-    end)
+    local mailbox = MailboxAPI:GetMailboxByCharIdentifier(Character.charIdentifier)
+    if not mailbox then
+        VORPcore.NotifyObjective(_source, _U('MailboxNotFound'), 5000)
+        return
+    end
+
+    fetchAndSendContacts(_source, mailbox.mailbox_id)
 end)
 
--- Function to get all players
+RegisterNetEvent("bcc-mailbox:getContacts")
+AddEventHandler("bcc-mailbox:getContacts", function()
+    local _source = source
+    local User = VORPcore.getUser(_source); if not User then return end
+    local Character = User.getUsedCharacter; if not Character then return end
+
+    local mailbox = MailboxAPI:GetMailboxByCharIdentifier(Character.charIdentifier)
+    if not mailbox then
+        VORPcore.NotifyObjective(_source, _U('MailboxNotFound'), 5000)
+        return
+    end
+
+    fetchAndSendContacts(_source, mailbox.mailbox_id)
+end)
+
+RegisterNetEvent("bcc-mailbox:addContact")
+AddEventHandler("bcc-mailbox:addContact", function(contactCode, contactAlias)
+    local _source = source
+    local User = VORPcore.getUser(_source); if not User then return end
+    local Character = User.getUsedCharacter; if not Character then return end
+
+    local ownerMailbox = MailboxAPI:GetMailboxByCharIdentifier(Character.charIdentifier)
+    if not ownerMailbox then
+        VORPcore.NotifyObjective(_source, _U('MailboxNotFound'), 5000)
+        return
+    end
+
+    local normalizedCode = normalizePostalCode(contactCode)
+    if not normalizedCode then
+        VORPcore.NotifyObjective(_source, _U('InvalidContactCode'), 5000)
+        return
+    end
+
+    local targetMailbox = MailboxAPI:GetMailboxByPostalCode(normalizedCode)
+    if not targetMailbox then
+        VORPcore.NotifyObjective(_source, _U('InvalidContactCode'), 5000)
+        return
+    end
+
+    if targetMailbox.mailbox_id == ownerMailbox.mailbox_id then
+        VORPcore.NotifyObjective(_source, _U('CannotAddSelf'), 5000)
+        return
+    end
+
+    local existing = MySQL.query.await(
+        'SELECT id FROM bcc_mailbox_contacts WHERE owner_mailbox_id = ? AND contact_mailbox_id = ? LIMIT 1',
+        { ownerMailbox.mailbox_id, targetMailbox.mailbox_id })
+
+    if existing and #existing > 0 then
+        VORPcore.NotifyObjective(_source, _U('ContactAlreadyExists'), 5000)
+        return
+    end
+
+    MySQL.insert.await(
+        'INSERT INTO bcc_mailbox_contacts (owner_mailbox_id, contact_mailbox_id, contact_alias) VALUES (?, ?, ?)',
+        { ownerMailbox.mailbox_id, targetMailbox.mailbox_id, contactAlias })
+
+    VORPcore.NotifyObjective(_source, _U('ContactAdded'), 5000)
+    fetchAndSendContacts(_source, ownerMailbox.mailbox_id)
+end)
+
+RegisterNetEvent("bcc-mailbox:removeContact")
+AddEventHandler("bcc-mailbox:removeContact", function(contactId)
+    local _source = source
+    local User = VORPcore.getUser(_source); if not User then return end
+    local Character = User.getUsedCharacter; if not Character then return end
+
+    local ownerMailbox = MailboxAPI:GetMailboxByCharIdentifier(Character.charIdentifier)
+    if not ownerMailbox then
+        VORPcore.NotifyObjective(_source, _U('MailboxNotFound'), 5000)
+        return
+    end
+
+    local numericId = tonumber(contactId)
+    if not numericId then
+        VORPcore.NotifyObjective(_source, _U('InvalidContactRemoval'), 5000)
+        return
+    end
+
+    local affected = MySQL.update.await('DELETE FROM bcc_mailbox_contacts WHERE id = ? AND owner_mailbox_id = ?',
+        { numericId, ownerMailbox.mailbox_id })
+
+    if affected and affected > 0 then
+        VORPcore.NotifyObjective(_source, _U('ContactRemoved'), 5000)
+        fetchAndSendContacts(_source, ownerMailbox.mailbox_id)
+    else
+        VORPcore.NotifyObjective(_source, _U('InvalidContactRemoval'), 5000)
+    end
+end)
+
 function GetPlayers()
     local players = {}
     for i = 0, GetNumPlayerIndices() - 1 do

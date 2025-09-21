@@ -14,13 +14,19 @@ shared_scripts {
 }
 
 client_scripts {
-  'client/client.lua'
+  'client/client.lua',
+  'client/controllers/*.lua',
+  'client/services/*.lua',
+  'client/menus/*.lua',
 }
 
 server_scripts {
   '@oxmysql/lib/MySQL.lua',
-  'server/dbUpdater.lua',
-  'server/server.lua'
+  'server/services/API.lua',
+  'server/dbupdater.lua',
+  'server/server.lua',
+  'server/helpers/*.lua',
+  'server/services/*.lua',
 }
 
 dependency {
@@ -32,4 +38,4 @@ dependency {
 	'bcc-utils'
 }
 
-version '0.0.1'
+version '0.1.0'

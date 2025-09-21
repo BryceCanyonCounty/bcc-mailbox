@@ -7,6 +7,9 @@ This script implements an in-game mailbox system for RedM servers, allowing play
 # Features
 - Players can register and manage their mailboxes.
 - Send and receive messages in-game via mailboxes.
+- Each mailbox is assigned a unique postal code that players can share instead of character names.
+- Built-in contact list so players can add, name, and remove trusted postal codes for quick sending.
+- One-click reply from the inbox with pre-filled recipients and searchable contact lists when composing mail.
 - Customizable mailbox locations.
 - Optional pigeon animation when sending messages.
 - Fully integrated with VORP and FeatherMenu.
