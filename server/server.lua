@@ -427,6 +427,9 @@ BccUtils.RPC:Register('bcc-mailbox:MarkMailRead', function(params, cb, src)
 
     if updated > 0 then
         DevPrint('MarkMailRead: updated. id=', numericId, ' new_state=', desiredState)
+        if Config.CoreHudIntegration and Config.CoreHudIntegration.enabled and char and char.charIdentifier then
+            exports['bcc-corehud']:RefreshMailboxCore(char.charIdentifier)
+        end
         cb(true, { readState = desiredState })
         return
     end
@@ -621,6 +624,9 @@ BccUtils.RPC:Register('bcc-mailbox:DeleteMail', function(params, cb, src)
     local affected = DeleteMailById(mailId)
     if affected > 0 then
         DevPrint('DeleteMail: deleted id=', mailId)
+        if Config.CoreHudIntegration and Config.CoreHudIntegration.enabled and char and char.charIdentifier then
+            exports['bcc-corehud']:RefreshMailboxCore(char.charIdentifier)
+        end
         NotifyClient(src, _U('MailDeleted'), 'success', 5000)
         cb(true)
         return

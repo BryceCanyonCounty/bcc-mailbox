@@ -146,15 +146,20 @@ function MailboxAPI:SendMailToMailbox(mailboxId, subject, message, options)
         if notifTarget then
             local mailboxIdStr = tostring(mailbox.mailbox_id)
             local postalCodeStr = tostring(mailbox.postal_code or '')
+            local charIdentifierStr = tostring(mailbox.char_identifier or '')
             local unreadCount = MySQL.scalar.await(
-                'SELECT COUNT(*) FROM bcc_mailbox_messages WHERE is_read = 0 AND (to_char = ? OR to_char = ?)',
-                { mailboxIdStr, postalCodeStr }
+                'SELECT COUNT(*) FROM bcc_mailbox_messages WHERE is_read = 0 AND (to_char = ? OR to_char = ? OR to_char = ?)',
+                { mailboxIdStr, postalCodeStr, charIdentifierStr }
             )
 
             if (unreadCount or 0) > 0 then
                 BccUtils.RPC:Notify('bcc-mailbox:checkMailNotification', { unreadCount = unreadCount }, notifTarget)
             end
         end
+    end
+
+    if Config.CoreHudIntegration and Config.CoreHudIntegration.enabled and mailbox.char_identifier then
+        exports['bcc-corehud']:RefreshMailboxCore(mailbox.char_identifier)
     end
 
     return true, insertedId

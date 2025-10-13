@@ -11,7 +11,7 @@ Config = {
     MailboxItem = "letter", -- Name of the item to use for opening the mailbox
     LetterPurchaseCost = 10, -- Cost to buy a replacement letter at a mailbox
     LetterPurchaseRadius = 2.0, -- Distance (meters) from a mailbox required to buy a letter
-	UnreadReminderIntervalMinutes = 15, -- Minutes between unread mail reminders
+    UnreadReminderIntervalMinutes = 15, -- Minutes between unread mail reminders
     LetterDurability = {
         Enabled = true,        -- Toggle durability system for the mailbox letter item
         Max = 100,             -- Maximum durability when the item is fresh
@@ -28,4 +28,7 @@ Config = {
         { name = "Valentine",   coords = vector3(-177.97, 628.17, 114.09) },
     },
     PlayYear = "1900",
+    CoreHudIntegration = {
+        enabled = true
+    }
 }
