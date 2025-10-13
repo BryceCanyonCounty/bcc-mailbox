@@ -7,9 +7,10 @@ Mailbox.State = Mailbox.State or {
     selectedPostalCode = nil,
     selectedContactName = nil,
     contacts = {},
-    pendingContactsAction = nil,
     lastMails = {},
     MailboxDisplay = nil,
+    suppressMailNotify = false,
+    nearMailbox = false,
 }
 
 -- helpers (no side effects)
@@ -36,4 +37,3 @@ end
 function Mailbox.FormatDate(timestamp)
     return timestamp
 end
-

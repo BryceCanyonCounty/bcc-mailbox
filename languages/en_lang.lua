@@ -68,5 +68,16 @@ Locales["en_lang"] = {
     ReplyButtonLabel = 'Reply',
     SearchRecipientsLabel = 'Search Contacts',
     SearchRecipientsPlaceholder = 'Type to search...',
-    ReplyingToLabel = 'Replying to:'
+    ReplyingToLabel = 'Replying to:',
+    LetterDurabilityUpdate = 'Letter durability: %s%%',
+    LetterDestroyed = 'Your letter has worn out.',
+    Durability = 'Durability: ',
+    LetterDurabilityDescription = 'Durability: %d%%',
+    MarkAsUnreadLabel = 'Mark as unread',
+    RegisterAtMailboxLocation = 'Visit a mailbox to register.',
+    PurchaseLetterButton = 'Buy Letter',
+    LetterPurchased = 'You purchased a letter.',
+    LetterPurchaseNoFunds = 'Not enough money to buy a letter.',
+    LetterInventoryFull = 'Your satchel cannot carry another letter.',
+    LetterPurchaseNotNear = 'You must be at a mailbox to buy a letter.'
 }

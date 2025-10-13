@@ -1,2 +1,15 @@
-<0.1.0>
-See GitHub for details!
+<1.0.0>
+### ✨ New Features
+- Added **Feather-Menu notifications** for smoother UI feedback.
+- Integrated **BccUtils RPC** for cleaner and more reliable client–server communication.
+- Added the ability to **mark messages as unread**.
+- Added an automatic check every **15 minutes** to notify players if they have unread messages.
+- Players can now **buy letters directly from mailbox locations**.
+- Introduced **durability for letters** to simulate wear and tear.
+- Added several new **API endpoints** for developers.
+
+### 🧰 Fixes & Improvements
+- Fixed issue where mailboxes were only registered at specific locations.
+- Fixed multiple **menu-related issues**.
+- Removed unnecessary **string formatting in menus**.
+- Various other **stability and performance improvements**.

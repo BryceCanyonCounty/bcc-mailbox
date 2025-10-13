@@ -38,9 +38,13 @@ CreateThread(function()
             `timestamp` DATETIME DEFAULT CURRENT_TIMESTAMP,
             `id` INT(11) NOT NULL AUTO_INCREMENT,
             `eta_timestamp` BIGINT(20) DEFAULT NULL,
+            `is_read` TINYINT(1) NOT NULL DEFAULT 0,
             PRIMARY KEY (`id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     ]])
+
+    MySQL.query.await("ALTER TABLE `bcc_mailbox_messages` ADD COLUMN IF NOT EXISTS `is_read` TINYINT(1) NOT NULL DEFAULT 0")
+    MySQL.update.await("UPDATE `bcc_mailbox_messages` SET `is_read` = 0 WHERE `is_read` IS NULL")
 
     MySQL.query.await([[ 
         CREATE TABLE IF NOT EXISTS `bcc_mailbox_contacts` (
@@ -54,37 +58,15 @@ CreateThread(function()
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     ]])
 
-    local function generatePostalCode()
-        local letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        local function randomLetter()
-            local index = math.random(1, #letters)
-            return letters:sub(index, index)
-        end
-        local function randomDigit()
-            return tostring(math.random(0, 9))
-        end
-        return randomLetter() .. randomLetter() .. randomDigit() .. randomDigit() .. randomDigit()
-    end
-
-    local function generateUniquePostalCode()
-        while true do
-            local candidate = generatePostalCode()
-            local exists = MySQL.scalar.await('SELECT 1 FROM `bcc_mailboxes` WHERE `postal_code` = ? LIMIT 1', { candidate })
-            if not exists then
-                return candidate
-            end
-        end
-    end
-
     local rows = MySQL.query.await("SELECT `mailbox_id` FROM `bcc_mailboxes` WHERE `postal_code` IS NULL OR `postal_code` = ''")
     if rows and #rows > 0 then
         for _, row in ipairs(rows) do
-            local code = generateUniquePostalCode()
+            local code = GenerateUniquePostalCode()
             local ok = pcall(function()
                 MySQL.update.await('UPDATE `bcc_mailboxes` SET `postal_code` = ? WHERE `mailbox_id` = ?', { code, row.mailbox_id })
             end)
             if not ok then
-                local code2 = generateUniquePostalCode()
+                local code2 = GenerateUniquePostalCode()
                 MySQL.update.await('UPDATE `bcc_mailboxes` SET `postal_code` = ? WHERE `mailbox_id` = ?', { code2, row.mailbox_id })
             end
         end
@@ -92,4 +74,3 @@ CreateThread(function()
 
     print("Database tables for \x1b[35m\x1b[1m*bcc-mailbox*\x1b[0m created or updated \x1b[32msuccessfully\x1b[0m.")
 end)
-

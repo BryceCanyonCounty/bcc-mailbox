@@ -68,5 +68,16 @@ Locales["ro_lang"] = {
     ReplyButtonLabel = 'Raspunde',
     SearchRecipientsLabel = 'Cauta contacte',
     SearchRecipientsPlaceholder = 'Tasteaza pentru a cauta...',
-    ReplyingToLabel = 'Raspuns catre:'
+    ReplyingToLabel = 'Raspuns catre:',
+    LetterDurabilityUpdate = 'Durabilitate telegrama: %s%%',
+    LetterDestroyed = 'Telegrama ta s-a deteriorat complet.',
+    Durability = 'Durabilitate: ',
+    LetterDurabilityDescription = 'Durabilitate: %d%%',
+    MarkAsUnreadLabel = 'Marcheaza ca necitita',
+    RegisterAtMailboxLocation = 'Mergi la o cutie postala pentru a te inregistra.',
+    PurchaseLetterButton = 'Cumpara Telegrama',
+    LetterPurchased = 'Ai cumparat o telegrama.',
+    LetterPurchaseNoFunds = 'Nu ai suficienti bani pentru a cumpara o telegrama.',
+    LetterInventoryFull = 'Nu poti cara mai multe telegrame.',
+    LetterPurchaseNotNear = 'Trebuie sa fii langa o cutie postala pentru a cumpara o telegrama.'
 }
