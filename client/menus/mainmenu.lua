@@ -1,10 +1,42 @@
-local VORPcore = exports.vorp_core:GetCore()
 local FeatherMenu = exports['feather-menu'].initiate()
+local BccUtils = exports['bcc-utils'].initiate()
 
 Mailbox = Mailbox or {}
 local State = Mailbox.State or {}
 local devPrint = Mailbox.devPrint or function() end
 local sanitizePostalCodeInput = Mailbox.sanitizePostalCodeInput or function(v) return v end
+
+local function loadContacts(nextStep)
+    -- capture BOTH return values
+    local ok, data = BccUtils.RPC:CallAsync("bcc-mailbox:GetContacts", {})
+
+    if ok and data then
+        Mailbox.State.contacts = data.contacts or {}
+        if type(nextStep) == 'function' then
+            nextStep()
+        end
+    else
+        Mailbox.State.contacts = {}
+        -- optional: debug
+        -- print('GetContacts failed:', data and data.reason)
+    end
+end
+
+local function fetchMailList(options)
+    local ok, data = BccUtils.RPC:CallAsync("bcc-mailbox:FetchMail", {})
+
+    if ok and data and Mailbox.ApplyMailList then
+        Mailbox.ApplyMailList(data.mails or {}, options)
+    end
+end
+
+local function purchaseLetter()
+    devPrint('purchaseLetter request')
+    local ok, data = BccUtils.RPC:CallAsync("bcc-mailbox:PurchaseLetter", {})
+    if not ok then
+        devPrint('Purchase letter failed')
+    end
+end
 
 -- Create and expose the mailbox menu once
 Mailbox.Menu = Mailbox.Menu or FeatherMenu:RegisterMenu('feather:mailbox:menu', {
@@ -44,6 +76,8 @@ function OpenMailboxMenu(hasMailbox)
     SelectRecipientPage = nil
     ManageContactsPage = nil
     AddContactPage = nil
+    RegisterPage = nil
+    MailActionPage = nil
 
     if not State.playermailboxId then
         State.playermailboxId = _U('MailNotRegistered')
@@ -51,7 +85,8 @@ function OpenMailboxMenu(hasMailbox)
 
     -- Only update display when menu is active to avoid feather-menu internal nils
     if State.menuOpen and State.MailboxDisplay ~= nil then
-        State.MailboxDisplay:update({ value = _U('PostalCodeLabel') .. (State.playerPostalCode or _U('MailNotRegistered')) })
+        State.MailboxDisplay:update({ value = _U('PostalCodeLabel') ..
+        (State.playerPostalCode or _U('MailNotRegistered')) })
     end
 
     if not RegisterPage then
@@ -68,9 +103,34 @@ function OpenMailboxMenu(hasMailbox)
             style = {}
         }, function()
             devPrint("Register Mailbox button pressed")
-            TriggerServerEvent("bcc-mailbox:registerMailbox")
+            local ok, data = BccUtils.RPC:CallAsync("bcc-mailbox:RegisterMailbox", {})
+            if ok and data then
+                if Mailbox.ApplyMailboxStatus then
+                    Mailbox.ApplyMailboxStatus({
+                        mailboxId = data.mailboxId,
+                        postalCode = data.postalCode,
+                        hasMailbox = true
+                    }, { openMenu = false })
+                else
+                    Mailbox.State.playermailboxId = data.mailboxId
+                    Mailbox.State.playerPostalCode = data.postalCode
+                end
+                OpenMailboxMenu(true)
+            else
+                devPrint("Mailbox registration failed via RPC")
+            end
         end)
         devPrint("RegisterPage created")
+
+        if State.nearMailbox then
+            RegisterPage:RegisterElement('button', {
+                label = _U('PurchaseLetterButton'),
+                style = {}
+            }, function()
+                devPrint("Purchase letter button pressed")
+                purchaseLetter()
+            end)
+        end
     end
 
     if not MailActionPage then
@@ -98,10 +158,9 @@ function OpenMailboxMenu(hasMailbox)
             style = {}
         }, function()
             devPrint("Send Mail button pressed")
-            State.pendingContactsAction = function()
+            loadContacts(function()
                 OpenSendMessagePage()
-            end
-            TriggerServerEvent('bcc-mailbox:getContacts')
+            end)
         end)
 
         MailActionPage:RegisterElement('button', {
@@ -109,18 +168,28 @@ function OpenMailboxMenu(hasMailbox)
             style = {}
         }, function()
             devPrint("Check Mail button pressed")
-            TriggerServerEvent("bcc-mailbox:checkMail")
+            Mailbox.State.suppressMailNotify = true
+            fetchMailList({ skipNotify = true })
         end)
+
+        if State.nearMailbox then
+            MailActionPage:RegisterElement('button', {
+                label = _U('PurchaseLetterButton'),
+                style = {}
+            }, function()
+                devPrint("Buy letter button pressed")
+                purchaseLetter()
+            end)
+        end
 
         MailActionPage:RegisterElement('button', {
             label = _U('ManageContactsButton'),
             style = {}
         }, function()
             devPrint("Manage Contacts button pressed")
-            State.pendingContactsAction = function()
+            loadContacts(function()
                 OpenManageContactsPage()
-            end
-            TriggerServerEvent('bcc-mailbox:getContacts')
+            end)
         end)
         devPrint("MailActionPage created")
     end
@@ -134,7 +203,8 @@ function OpenMailboxMenu(hasMailbox)
     end
     -- After open, display becomes safe to update
     if State.MailboxDisplay ~= nil then
-        State.MailboxDisplay:update({ value = _U('PostalCodeLabel') .. (State.playerPostalCode or _U('MailNotRegistered')) })
+        State.MailboxDisplay:update({ value = _U('PostalCodeLabel') ..
+        (State.playerPostalCode or _U('MailNotRegistered')) })
     end
 end
 
@@ -156,7 +226,8 @@ function OpenCheckMessagePage(mails)
         local fromName = mail.from_name or "Unknown"
         local subject = mail.subject or "No Subject"
         local fromCode = mail.from_char and tostring(mail.from_char) or _U('UnknownPostalCode')
-        local buttonLabel = string.format("%d. %s %s (%s) — %s", index, _U('mailFrom'), fromName, fromCode, subject)
+        local buttonLabel = tostring(index) ..
+        ". " .. _U('mailFrom') .. " " .. fromName .. " (" .. fromCode .. ") — " .. subject
 
         CheckMessagePage:RegisterElement('button', {
             label = buttonLabel,
@@ -192,6 +263,30 @@ function OpenMessagePage(mail)
     devPrint("Opening MessagePage for mail:", mail and json.encode(mail) or 'nil')
     local MessagePage = Mailbox.Menu:RegisterPage('message:page')
 
+    local mailId = tonumber(mail and mail.id or 0)
+    if mailId and mailId > 0 then
+        if tonumber(mail.is_read or 0) ~= 1 then
+            -- ⬇️ capture BOTH return values
+            local ok, data = BccUtils.RPC:CallAsync("bcc-mailbox:MarkMailRead", { mailId = mailId, read = true })
+
+            if ok and data then
+                mail.is_read = tonumber(data.readState or 1) or 1
+
+                -- update cache
+                local list = State.lastMails or {}
+                for index, cached in ipairs(list) do
+                    if tonumber(cached.id or 0) == mailId then
+                        cached.is_read = mail.is_read
+                        break
+                    end
+                end
+            else
+                -- optional: handle error (data may contain .reason)
+                -- print('MarkMailRead failed', data and data.reason)
+            end
+        end
+    end
+
     MessagePage:RegisterElement('header', {
         value = _U('MessageContentHeader'),
         slot = "header",
@@ -200,28 +295,50 @@ function OpenMessagePage(mail)
 
     local fromName = mail.from_name or _U('UnknownSender')
     local fromCode = mail.from_char and tostring(mail.from_char) or _U('UnknownPostalCode')
-    local messageHTML = string.format([[        
-        <div style="width: 80%%; margin: 40px auto; padding: 20px; font-family: 'Bookman Old Style', serif; border: 1px solid #8B4513; border-radius: 5px;">
-            <p style="font-size:18px; margin-bottom: 6px; text-align:left;">
-                %s
-            </p>
-            <p style="font-size:22px; font-weight:bold; margin-bottom: 10px; text-align:center; text-shadow: 1px 1px 2px #000;">
-                %s
-            </p>
-            <p style="font-size:18px; line-height: 1.7; text-align:left; white-space:pre-wrap; border: 1px solid #8B4513; border-radius: 3px; padding: 10px;">
-                %s
-            </p>
-        </div>
-    ]],
-        string.format('%s %s (%s)', _U('mailFrom'), fromName, fromCode),
-        mail.subject or "No Subject",
-        mail.message or "No message content"
-    )
+    local messageHTML = table.concat({
+        [[<div style="width: 80%; margin: 40px auto; padding: 20px; font-family: 'Bookman Old Style', serif; border: 1px solid #8B4513; border-radius: 5px;">]],
+        [[    <p style="font-size:18px; margin-bottom: 6px; text-align:left;">]],
+        [[        ]] .. _U('mailFrom') .. " " .. fromName .. " (" .. fromCode .. ")",
+        [[    </p>]],
+        [[    <p style="font-size:22px; font-weight:bold; margin-bottom: 10px; text-align:center; text-shadow: 1px 1px 2px #000;">]],
+        [[        ]] .. (mail.subject or "No Subject"),
+        [[    </p>]],
+        [[    <p style="font-size:18px; line-height: 1.7; text-align:left; white-space:pre-wrap; border: 1px solid #8B4513; border-radius: 3px; padding: 10px;">]],
+        [[        ]] .. (mail.message or "No message content"),
+        [[    </p>]],
+        [[</div>]]
+    }, '\n')
 
     MessagePage:RegisterElement('html', {
         value = { messageHTML },
         style = {}
     })
+
+    MessagePage:RegisterElement('checkbox', {
+        label = _U('MarkAsUnreadLabel'),
+        start = (tonumber(mail.is_read or 0) == 0)
+    }, function(data)
+        local markUnread = data.value and data.value ~= false
+        local current = tonumber(mail.is_read or 0) or 0
+        local desired = markUnread and 0 or 1
+        if current == desired then return end
+
+        local ok, data = BccUtils.RPC:CallAsync("bcc-mailbox:MarkMailRead", { mailId = mail.id, read = not markUnread })
+        if ok and data then
+            local state = tonumber(data.readState or desired) or desired
+            mail.is_read = state
+            for index, cached in ipairs(State.lastMails or {}) do
+                if tonumber(cached.id or 0) == tonumber(mail.id or 0) then
+                    State.lastMails[index].is_read = state
+                    break
+                end
+            end
+        else
+            -- revert checkbox to previous state if update failed
+            Mailbox.State.suppressMailNotify = true
+            fetchMailList({ skipNotify = true })
+        end
+    end)
 
     MessagePage:RegisterElement('line', {
         slot = "footer",
@@ -249,8 +366,9 @@ function OpenMessagePage(mail)
         slot = "footer",
         style = {},
     }, function()
-        TriggerServerEvent("bcc-mailbox:deleteMail", mail.id)
-        TriggerServerEvent("bcc-mailbox:checkMail")
+        Mailbox.State.suppressMailNotify = true
+        BccUtils.RPC:CallAsync("bcc-mailbox:DeleteMail", { mailId = mail.id })
+        fetchMailList({ skipNotify = true })
     end)
 
     MessagePage:RegisterElement('bottomline', {
@@ -295,8 +413,8 @@ function OpenSelectRecipientPage()
             sortedContacts[#sortedContacts + 1] = contact
         end
         table.sort(sortedContacts, function(a, b)
-            local nameA = (a.displayName or a.postal_code or ''):lower()
-            local nameB = (b.displayName or b.postal_code or ''):lower()
+            local nameA = (a.displayName or a.postalCode or ''):lower()
+            local nameB = (b.displayName or b.postalCode or ''):lower()
             if nameA == nameB then
                 return (a.postal_code or '') < (b.postal_code or '')
             end
@@ -305,11 +423,11 @@ function OpenSelectRecipientPage()
 
         local hasResults = false
         for _, contact in ipairs(sortedContacts) do
-            local displayName = contact.displayName or contact.postal_code
-            local label = string.format("%s (%s)", displayName, contact.postal_code)
+            local displayName = contact.displayName or contact.postalCode
+            local label = (displayName or '') .. " (" .. (contact.postalCode or '') .. ")"
             local haystack = label:lower()
-            local contactPostal = sanitizePostalCodeInput(contact.postal_code)
-            local skipSelf = (contact.mailbox_id and contact.mailbox_id == State.playermailboxId)
+            local contactPostal = sanitizePostalCodeInput(contact.postalCode)
+            local skipSelf = (contact.mailboxId and contact.mailboxId == State.playermailboxId)
                 or (contactPostal ~= '' and contactPostal == sanitizePostalCodeInput(State.playerPostalCode))
             if not skipSelf then
                 if filterLower == '' or haystack:find(filterLower, 1, true) then
@@ -455,13 +573,17 @@ function OpenSendMessagePage(defaults)
     }, function()
         local sendCode = sanitizePostalCodeInput(recipientCode)
         if sendCode == '' then
-            VORPcore.NotifyObjective(_U('InvalidRecipient'), 5000)
+            Notify(_U('InvalidRecipient'), "error", 5000)
             return
         end
         devPrint("recipientPostalCode:", tostring(sendCode), "subjectTitle:", subjectTitle)
-        TriggerServerEvent("bcc-mailbox:sendMail", sendCode, subjectTitle, mailMessage)
+        BccUtils.RPC:CallAsync("bcc-mailbox:SendMail", {
+            recipientPostalCode = sendCode,
+            subject = subjectTitle,
+            message = mailMessage
+        })
         if Config.SendPigeon then
-            TriggerEvent('spawnPigeon')
+            SpawnPigeon()
         end
         OpenMailboxMenu(true)
     end)
@@ -487,7 +609,7 @@ function OpenSendMessagePageWithReply(originalMail)
     if not originalMail then return end
     local replyCode = sanitizePostalCodeInput(originalMail.from_char or '')
     if replyCode == '' then
-        VORPcore.NotifyObjective(_U('InvalidRecipient'), 5000)
+        Notify(_U('InvalidRecipient'), "error", 5000)
         return
     end
 
@@ -500,8 +622,9 @@ function OpenSendMessagePageWithReply(originalMail)
         postalCode = replyCode,
         subject = replySubject,
         selectedName = State.selectedContactName,
-        infoHtml = string.format('<p style="text-align: center; font-size: 16px; margin: 10px 0;">%s <b>%s</b></p>',
-            _U('ReplyingToLabel') or 'Replying to:', originalMail.from_name or 'Unknown')
+        infoHtml = '<p style="text-align: center; font-size: 16px; margin: 10px 0;">'
+            .. (_U('ReplyingToLabel') or 'Replying to:')
+            .. ' <b>' .. (originalMail.from_name or 'Unknown') .. '</b></p>'
     })
 end
 
@@ -528,35 +651,36 @@ function OpenManageContactsPage()
     end
 
     for _, contact in ipairs(State.contacts or {}) do
-        local label = string.format("%s (%s)", contact.displayName or contact.postal_code, contact.postal_code)
+        local label = (contact.displayName or contact.postalCode or '') .. " (" .. (contact.postalCode or '') .. ")"
         ManageContactsPage:RegisterElement('button', {
             label = _U('RemoveContactButton') .. label,
             style = {},
         }, function()
             devPrint("Removing contact:", label)
-            State.pendingContactsAction = function()
+            local ok, data = BccUtils.RPC:CallAsync("bcc-mailbox:RemoveContact", { contactId = contact.id })
+            if ok and data then
+                Mailbox.State.contacts = data.contacts or {}
                 OpenManageContactsPage()
+            else
+                loadContacts(function()
+                    OpenManageContactsPage()
+                end)
             end
-            TriggerServerEvent('bcc-mailbox:removeContact', contact.id)
         end)
     end
-
-    ManageContactsPage:RegisterElement('line', {
-        slot = "content",
-        style = {}
-    })
-
-    ManageContactsPage:RegisterElement('button', {
-        label = _U('AddContactButton'),
-        style = {}
-    }, function()
-        OpenAddContactPage()
-    end)
 
     ManageContactsPage:RegisterElement('line', {
         slot = "footer",
         style = {}
     })
+
+    ManageContactsPage:RegisterElement('button', {
+        label = _U('AddContactButton'),
+        slot = "footer",
+        style = {}
+    }, function()
+        OpenAddContactPage()
+    end)
 
     ManageContactsPage:RegisterElement('button', {
         label = _U('BackButtonLabel'),
@@ -619,10 +743,18 @@ function OpenAddContactPage()
         slot = "footer",
         style = {},
     }, function()
-        State.pendingContactsAction = function()
+        local ok, data = BccUtils.RPC:CallAsync("bcc-mailbox:AddContact", {
+            contactCode  = contactCodeInput,
+            contactAlias = contactAliasInput
+        })
+        if ok and data then
+            Mailbox.State.contacts = data.contacts or {}
             OpenManageContactsPage()
+        else
+            loadContacts(function()
+                OpenManageContactsPage()
+            end)
         end
-        TriggerServerEvent('bcc-mailbox:addContact', contactCodeInput, contactAliasInput)
     end)
 
     AddContactPage:RegisterElement('button', {

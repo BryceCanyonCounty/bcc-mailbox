@@ -1,13 +1,23 @@
 Config = {
     -- Language settings
-    defaultlang = "ro_lang", -- Set Your Language (Current Languages: "en_lang" English, "ro_lang" Romanian)
+    defaultlang = "en_lang", -- Set Your Language (Current Languages: "en_lang" English, "ro_lang" Romanian)
     RegistrationFee = 20,     -- Cost to register
-    SendMessageFee = 2,       --Cost to send messages
+    SendMessageFee = 5,       --Cost to send messages
     TimePerMile = 0.1,       -- Time in seconds per mile
     SendPigeon = false,       -- If you want the Pigeon or not
+    Notify = "feather-menu",  -- Options: "feather-menu", "vorp-core"
 
     devMode = false,
     MailboxItem = "letter", -- Name of the item to use for opening the mailbox
+    LetterPurchaseCost = 10, -- Cost to buy a replacement letter at a mailbox
+    LetterPurchaseRadius = 2.0, -- Distance (meters) from a mailbox required to buy a letter
+	UnreadReminderIntervalMinutes = 15, -- Minutes between unread mail reminders
+    LetterDurability = {
+        Enabled = true,        -- Toggle durability system for the mailbox letter item
+        Max = 100,             -- Maximum durability when the item is fresh
+        DamagePerUse = 5,      -- Durability lost each time the letter is used
+        NotifyOnChange = false  -- Inform the player after each use
+    },
     MailboxLocations = {
         { name = "Annesburg",   coords = vector3(2939.24, 1286.93, 44.65) },
         { name = "Armadillo",   coords = vector3(-3732.36, -2597.82, -12.94) },
@@ -19,4 +29,3 @@ Config = {
     },
     PlayYear = "1900",
 }
-

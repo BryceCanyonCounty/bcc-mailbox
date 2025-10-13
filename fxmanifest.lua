@@ -22,11 +22,11 @@ client_scripts {
 
 server_scripts {
   '@oxmysql/lib/MySQL.lua',
-  'server/services/API.lua',
+  'server/API.lua',
+  'server/controllers.lua',
+  'server/helpers.lua',
   'server/dbupdater.lua',
   'server/server.lua',
-  'server/helpers/*.lua',
-  'server/services/*.lua',
 }
 
 dependency {
@@ -38,4 +38,4 @@ dependency {
 	'bcc-utils'
 }
 
-version '0.1.0'
+version '1.0.0'
