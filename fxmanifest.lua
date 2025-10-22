@@ -25,7 +25,7 @@ server_scripts {
   'server/API.lua',
   'server/controllers.lua',
   'server/helpers.lua',
-  'server/dbupdater.lua',
+  'server/dbUpdater.lua',
   'server/server.lua',
 }
 
