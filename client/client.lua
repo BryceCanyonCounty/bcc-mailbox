@@ -1,6 +1,7 @@
 local VORPcore = exports.vorp_core:GetCore()
 local FeatherMenu = exports['feather-menu'].initiate()
 local BccUtils = exports['bcc-utils'].initiate()
+local BlipsCreated = {}
 
 Config = Config or {}
 Config.Notify = Config.Notify or "feather-menu"
@@ -42,4 +43,19 @@ end
 BccUtils.RPC:Register("bcc-mailbox:NotifyClient", function(data)
     if not data then return end
     Notify(data.message, data.type, data.duration)
+end)
+
+function CreateBlips()
+    for _, v in pairs(Config.MailboxLocations) do
+        local blip = BccUtils.Blips:SetBlip('Mail Office', v.BlipSprite, 3.2,
+            v.coords.x, v.coords.y, v.coords.z)
+        BlipsCreated[#BlipsCreated + 1] = blip
+    end
+end
+
+CreateBlips()
+
+AddEventHandler('onResourceStop', function(resourceName)
+    for _, blips in ipairs(BlipsCreated) do blips:Remove() end
+    DevPrint('Removed blips')
 end)
