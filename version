@@ -1,3 +1,5 @@
+<1.1.1>
+- Replaced client error notification with internal debug logging for mailbox update failures.
 <1.1.0>
 - Fixed typo
 - Add blip creation for mailbox locations and cleanup on resource stop
@@ -16,3 +18,4 @@
 - Fixed multiple **menu-related issues**.
 - Removed unnecessary **string formatting in menus**.
 - Various other **stability and performance improvements**.
+<1.0.0>
