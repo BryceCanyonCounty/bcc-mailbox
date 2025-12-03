@@ -225,8 +225,7 @@ BccUtils.RPC:Register('bcc-mailbox:UpdateMailboxInfo', function(params, cb, src)
         return
     end
 
-    DevPrint('UpdateMailboxInfo: update failed for char_identifier=', charIdentifier)
-    NotifyClient(src, _U('UpdateMailboxFailed') .. tostring(charIdentifier), 'error', 4000)
+    DevPrint('UpdateMailboxInfo: failed to update mailbox for char_identifier=' .. tostring(charIdentifier))
     cb(false)
 end)
 
